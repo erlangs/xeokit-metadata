@@ -2,12 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Xbim.Common.Step21;
 using Xbim.Ifc;
-using Xbim.Ifc4.Interfaces;
+using Xbim.Ifc2x3.Interfaces;
 
 namespace XeokitMetadata {
   /// <summary>
@@ -19,22 +18,22 @@ namespace XeokitMetadata {
     /// <summary>
     ///   The GlobalId of the building element
     /// </summary>
-    public string id;
+    public string Id;
 
     /// <summary>
     ///   The Name of the building element
     /// </summary>
-    public string name;
+    public string Name;
 
     /// <summary>
     ///   The IFC type of the building element, e.g. 'IfcStandardWallCase'
     /// </summary>
-    public string type;
+    public string Type;
 
     /// <summary>
     ///   The GlobalId of the parent element if any.
     /// </summary>
-    public string parent;
+    public string Parent;
   }
 
   /// <summary>
@@ -44,106 +43,46 @@ namespace XeokitMetadata {
   /// </summary>
   public struct MetaModel {
     /// <summary>
-    ///   Initializes `MetaModel` instance.
-    /// </summary>
-    /// <param name="id"></param>
-    /// <param name="projectId"></param>
-    /// <param name="author"></param>
-    /// <param name="createdAt"></param>
-    /// <param name="schema"></param>
-    /// <param name="creatingApplication"></param>
-    public void init(
-      string id,
-      string projectId,
-      string author,
-      string createdAt,
-      string schema,
-      string creatingApplication){
-      this.id = id;
-      this.projectId = projectId;
-      this.author = author;
-      this.createdAt = createdAt;
-      this.schema = schema;
-      this.creatingApplication = creatingApplication;
-    }
-    
-    /// <summary>
     ///   The Id field is populated with the name of the project.
     /// </summary>
-    public string id;
+    public string Id;
 
     /// <summary>
     ///   The GlobalId of the project.
     /// </summary>
-    public string projectId;
-
-    /// <summary>
-    ///   The author of the project.
-    /// </summary>
-    public string author;
-
-    /// <summary>
-    ///   The creation date of the project.
-    /// </summary>
-    public string createdAt;
-
-    /// <summary>
-    ///   The schema of the ifc model.
-    /// </summary>
-    public string schema;
-    
-    /// <summary>
-    ///   The application with which the model was created.
-    /// </summary>
-    public string creatingApplication;
+    public string ProjectId;
 
     /// <summary>
     ///   A list of all building elements as MetaObjects within the project.
     /// </summary>
-    public List<MetaObject> metaObjects;
-    
+    public List<MetaObject> MetaObjects;
+
     /// <summary>
     ///   The convenience initialiser creates and returns an instance of the
     ///   MetaModel by parsing the IFC at the provided path.
     /// </summary>
     /// <param name="ifcPath">A string path of the IFC path.</param>
     /// <returns>Returns the complete MetaModel of the IFC.</returns>
-    public static MetaModel fromIfc(string ifcPath) {
+    /// <exception cref="ArgumentException">
+    ///   Throws an exception if the provided IFC file is not using the 2x3
+    ///   schema.
+    /// </exception>
+    public static MetaModel FromIfc(string ifcPath) {
       using (var model = IfcStore.Open(ifcPath)) {
+        if (model.SchemaVersion != XbimSchemaVersion.Ifc2X3)
+          throw new ArgumentException(
+            "Currently only IFC 2x3 is supported");
 
         var project = model.Instances.FirstOrDefault<IIfcProject>();
 
-        var header = model.Header;
         var metaModel = new MetaModel();
-        metaModel.init(
-          project.Name,
-          project.GlobalId,
-          getAuthor(header.FileName.AuthorName),
-          header.TimeStamp,
-          header.SchemaVersion,
-          header.CreatingApplication);
+        metaModel.Id = project.Name;
+        metaModel.ProjectId = project.GlobalId;
 
-        var metaObjects = extractHierarchy(project);
-        metaModel.metaObjects = metaObjects;
+        var metaObjects = ExtractHierarchy(project, new MetaObject());
+        metaModel.MetaObjects = metaObjects;
         return metaModel;
       }
-    }
-
-    /// <summary>
-    ///   Method returns the names of authors in one string,
-    ///   separated by ";".
-    /// </summary>
-    /// <param name="authors">List of authors.</param>
-    /// <returns>Authors names.</returns>
-    private static string getAuthor(IList<string> authors){
-      var author = "";
-      foreach (var item in authors) {
-        author += item;
-        //separator of authors
-        if (!item.Equals(authors.Last()))
-          author += ";";
-      }
-      return author;
     }
 
     /// <summary>
@@ -158,16 +97,14 @@ namespace XeokitMetadata {
     ///   Returns a flattened list of all MetaObject-s related to the provided
     ///   IIfcObjectDefinition.
     /// </returns>
-    private static List<MetaObject> extractHierarchy(
-      IIfcObjectDefinition objectDefinition, 
-      string parentId=null) {
+    private static List<MetaObject> ExtractHierarchy(IIfcObjectDefinition objectDefinition, MetaObject parent) {
       var metaObjects = new List<MetaObject>();
 
-      var parentObject = new MetaObject {
-        id = objectDefinition.GlobalId,
-        name = objectDefinition.Name,
-        type = objectDefinition.GetType().Name,
-        parent = parentId
+        var parentObject = new MetaObject {
+            Id = objectDefinition.GlobalId,
+            Name = objectDefinition.Name,
+            Type = objectDefinition.GetType().Name,
+            Parent = parent.Id == null ? null : parent.Id
       };
 
       metaObjects.Add(parentObject);
@@ -181,51 +118,25 @@ namespace XeokitMetadata {
 
         foreach (var element in containedElements) {
           var mo = new MetaObject {
-            id = element.GlobalId,
-            name = element.Name,
-            type = element.GetType().Name,
-            parent = spatialElement.GlobalId
+            Id = element.GlobalId,
+            Name = element.Name,
+            Type = element.GetType().Name,
+            Parent = spatialElement.GlobalId
           };
-          
           metaObjects.Add(mo);
-          extractRelatedObjects(
-            element, 
-            ref metaObjects, 
-            mo.id);
         }
       }
 
-      extractRelatedObjects(
-        objectDefinition, 
-        ref metaObjects, 
-        parentObject.id);
-      
-      return metaObjects;
-    }
-
-    /// <summary>
-    ///   Method extracts related objects hierarchy,
-    /// then add children to metaObjects.
-    /// </summary>
-    /// <param name="objectDefinition">
-    ///  Accepts an IIfcObjectDefinition parameter, which related elements are
-    ///  then iterated in search for additional structure elements.
-    /// </param>
-    /// <param name="metaObjects">Reference of 'MetaObject' list</param>
-    /// <param name="parentObjId">Id of parent object.</param>
-    private static void extractRelatedObjects(
-      IIfcObjectDefinition objectDefinition,
-      ref List<MetaObject> metaObjects, 
-      string parentObjId){
-      
       var relatedObjects = objectDefinition
         .IsDecomposedBy
         .SelectMany(r => r.RelatedObjects);
 
       foreach (var item in relatedObjects) {
-        var children = extractHierarchy(item, parentObjId);
+        var children = ExtractHierarchy(item, parentObject);
         metaObjects.AddRange(children);
       }
+
+      return metaObjects;
     }
 
     /// <summary>
@@ -238,7 +149,7 @@ namespace XeokitMetadata {
     /// <param name="jsonPath">
     ///   The path of the output JSON file.
     /// </param>
-    public void toJson(string jsonPath) {
+    public async void ToJson(string jsonPath) {
       var contractResolver = new DefaultContractResolver {
         NamingStrategy = new CamelCaseNamingStrategy()
       };
@@ -249,7 +160,7 @@ namespace XeokitMetadata {
 
       using (var outputFile = new StreamWriter(jsonPath)) {
         var output = JsonConvert.SerializeObject(this, settings);
-        outputFile.Write(output);
+        await outputFile.WriteAsync(output);
       }
     }
   }
